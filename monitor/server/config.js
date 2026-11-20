@@ -69,7 +69,8 @@ export function normalizeConfig(raw) {
     defaults,
     devices,
     notifications: {
-      ntfy: n.ntfy || null,
+      // The placeholder topic from the starter/example config is public: never send alerts to it.
+      ntfy: n.ntfy?.topic && !/^CHANGE-ME/i.test(n.ntfy.topic) ? n.ntfy : null,
       pushover: n.pushover || null,
       webhook: n.webhook || null,
       digestTime: n.digestTime || '07:30',

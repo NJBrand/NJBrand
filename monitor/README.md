@@ -3,6 +3,8 @@
 A small self-hosted system that watches the office's computers and network equipment, alerts
 your phone when something breaks, and keeps a history of equipment health and maintenance.
 
+**Setting it up? Start with [INSTALL.md](INSTALL.md)** (step by step, Windows).
+
 - **Zero dependencies.** Node.js 22.13+ built-ins only (same approach as the Vault app in this repo).
 - **Windows agent** is a read-only PowerShell script run by Task Scheduler. Nothing to buy or license.
 - **Alerts** go to the free [ntfy](https://ntfy.sh) app (iPhone/Android/desktop), Pushover, or any webhook.
@@ -48,17 +50,7 @@ It must be **on the office LAN** (or on Tailscale with the PCs) so agents can re
 
 ### On Windows
 
-1. Install **Node.js LTS** (22.13 or newer) from https://nodejs.org (defaults are fine).
-2. Give the PC a fixed IP (a DHCP reservation in UniFi is easiest), so the agents can always find it.
-3. Set the PC to never sleep: **Settings → System → Power → Sleep: Never**.
-4. Copy this repo to the PC, then in an **elevated PowerShell** in `monitor\deploy\windows`:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\NJMonitor-Server.ps1 install
-   ```
-   It prints the **dashboard admin password** once (also saved in `C:\ProgramData\NJMonitor-Server\server.env`)
-   and the dashboard address, e.g. `http://192.168.1.50:8090`.
-5. Edit `C:\ProgramData\NJMonitor-Server\config.json` (as Administrator: devices, ntfy topic, UniFi), then
-   `NJMonitor-Server.ps1 restart`. Restart is also how config changes take effect later.
+**Follow [INSTALL.md](INSTALL.md)**: a click-by-click guide for the server, phone alerts, UniFi and tablets, and each PC.
 
 It runs as the **NJMonitor Server** scheduled task: starts at boot as SYSTEM, needs nobody logged in,
 and a 5-minute watchdog starts it again if it ever stops. The firewall rule only allows the local subnet.

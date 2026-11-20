@@ -111,8 +111,38 @@ switch ($Action) {
 
     $newConfig = -not (Test-Path $Config)
     if ($newConfig) {
-      Copy-Item (Join-Path $Source 'config.example.json') $Config
-      Write-Host "Created $Config from the example. Edit it (devices, ntfy topic) before relying on alerts."
+      # A starter config with no devices, so nothing is probed or alerted until you add your own.
+      # (config.example.json, copied to app\, has a full example of every option.)
+      $ianaZones = @{
+        'Eastern Standard Time' = 'America/New_York'; 'Central Standard Time' = 'America/Chicago'
+        'Mountain Standard Time' = 'America/Denver'; 'US Mountain Standard Time' = 'America/Phoenix'
+        'Pacific Standard Time' = 'America/Los_Angeles'; 'Alaskan Standard Time' = 'America/Anchorage'
+        'Hawaiian Standard Time' = 'Pacific/Honolulu'; 'Atlantic Standard Time' = 'America/Halifax'
+        'GMT Standard Time' = 'Europe/London'; 'AUS Eastern Standard Time' = 'Australia/Sydney'
+      }
+      $tz = $ianaZones[(Get-TimeZone).Id]
+      if (-not $tz) { $tz = 'UTC'; Write-Warning "Unknown time zone '$((Get-TimeZone).Id)': set ""timezone"" in config.json (e.g. America/Chicago)." }
+      $starter = @"
+{
+  "timezone": "$tz",
+
+  "devices": [
+  ],
+
+  "notifications": {
+    "ntfy": { "server": "https://ntfy.sh", "topic": "CHANGE-ME-to-a-long-random-string", "token": null },
+    "digestTime": "07:30"
+  },
+
+  "unifi": null,
+
+  "maintenance": [
+    { "id": "physical-clean", "name": "Clean dust from fans and vents", "intervalDays": 180 }
+  ]
+}
+"@
+      [IO.File]::WriteAllText($Config, $starter, (New-Object Text.UTF8Encoding($false)))
+      Write-Host "Created a starter $Config (no devices yet, time zone $tz)."
     }
 
     if (-not (Test-Path $EnvFile)) {
@@ -174,7 +204,7 @@ switch ($Action) {
     if ($acSleep -match 'Current AC Power Setting Index: (0x[0-9a-f]+)' -and [Convert]::ToInt32($Matches[1], 16) -gt 0) {
       Write-Warning 'This PC is set to sleep when idle. Set "Sleep" to Never (Settings > System > Power), or alerts stop while it sleeps.'
     }
-    if ($newConfig) { Write-Host "Next: edit $Config, then run:  NJMonitor-Server.ps1 restart" }
+    if ($newConfig) { Write-Host 'Next: follow INSTALL.md from "Part 3" (phone alerts), then add your devices.' }
   }
 
   'uninstall' {
@@ -187,9 +217,11 @@ switch ($Action) {
   'start' { Start-ScheduledTask -TaskName $TaskName; if (Wait-Server) { Write-Host 'Running.' } else { Show-LogTail; throw 'Did not start.' } }
   'stop' { Stop-ScheduledTask -TaskName $TaskName; Write-Host 'Stopped. (The 5-minute watchdog starts it again; use uninstall to stop it for good.)' }
   'restart' {
+    # Check first: a typo in config.json must not take down a running server.
+    Write-Host 'Checking config ...'
+    try { Invoke-Cli @('check-config') } catch { throw "config.json has a problem (see above). The server was NOT restarted and is still running the old config." }
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
-    Invoke-Cli @('check-config')
     Start-ScheduledTask -TaskName $TaskName
     if (Wait-Server) { Write-Host 'Restarted.' } else { Show-LogTail; throw 'Did not start.' }
   }

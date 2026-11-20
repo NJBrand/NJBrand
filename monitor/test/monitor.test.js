@@ -87,6 +87,11 @@ test('config: Wi-Fi client MACs are normalized and validated; low priority is ro
   assert.equal(normalizeConfig({ devices: [{ id: 'kiosk', priority: 'low' }] }).devices[0].priority, 'low');
 });
 
+test('config: the placeholder ntfy topic is never used', () => {
+  assert.equal(normalizeConfig({ notifications: { ntfy: { topic: 'CHANGE-ME-to-a-long-random-string' } } }).notifications.ntfy, null);
+  assert.equal(normalizeConfig({ notifications: { ntfy: { topic: 'nj-it-7Hq2xPz9Lk4m' } } }).notifications.ntfy.topic, 'nj-it-7Hq2xPz9Lk4m');
+});
+
 test('alert message matches the agreed format', () => {
   const m = formatAlert('open', { device_id: 'pc', severity: 'critical', title: 'Computer offline', issue: 'Computer not responding', action: 'Investigate connectivity and system availability', opened_at: T }, pc, { now: T, timezone: 'America/New_York', lastSeen: Date.parse('2026-11-20T15:42:00Z') });
   assert.equal(m.title, 'IT ALERT — Front Desk PC: Computer offline');
