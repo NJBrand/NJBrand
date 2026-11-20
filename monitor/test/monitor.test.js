@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { startServer } from '../server/app.js';
 import { normalizeConfig } from '../server/config.js';
-import { evaluateReport } from '../server/evaluate.js';
+import { evaluateReport, outageSeverity } from '../server/evaluate.js';
 import { formatAlert } from '../server/notify.js';
 
 const HOUR = 3_600_000;
@@ -76,6 +76,17 @@ test('malformed report entries are ignored, not fatal', () => {
   assert.equal(keyed(r)['service:spooler'].ok, true);
 });
 
+test('config: Wi-Fi client MACs are normalized and validated; low priority is routine', () => {
+  const c = normalizeConfig({ unifi: { url: 'https://u', apiKey: 'k', clients: [{ mac: 'AA-BB-CC-DD-EE-FF', name: 'T' }] } });
+  assert.equal(c.unifi.clients[0].mac, 'aa:bb:cc:dd:ee:ff');
+  assert.equal(c.unifi.clients[0].priority, 'low');
+  assert.equal(c.unifi.clients[0].offlineAfterMinutes, 30);
+  assert.throws(() => normalizeConfig({ unifi: { clients: [{ mac: 'nope' }] } }), /MAC address/);
+  assert.throws(() => normalizeConfig({ unifi: { clients: [{ mac: 'aabbccddeeff' }, { mac: 'AA:BB:CC:DD:EE:FF' }] } }), /twice/);
+  assert.equal(outageSeverity({ priority: 'low' }), 'routine');
+  assert.equal(normalizeConfig({ devices: [{ id: 'kiosk', priority: 'low' }] }).devices[0].priority, 'low');
+});
+
 test('alert message matches the agreed format', () => {
   const m = formatAlert('open', { device_id: 'pc', severity: 'critical', title: 'Computer offline', issue: 'Computer not responding', action: 'Investigate connectivity and system availability', opened_at: T }, pc, { now: T, timezone: 'America/New_York', lastSeen: Date.parse('2026-11-20T15:42:00Z') });
   assert.equal(m.title, 'IT ALERT — Front Desk PC: Computer offline');
@@ -93,19 +104,26 @@ test('config validation rejects bad input', () => {
 
 // ---------------- end to end: real server, real HTTP, captured notifications ----------------
 
-let app, hook, received, unifiState, closedPort;
+let app, hook, received, unifiState, unifiClients, unifiClientsFail, closedPort;
+const TABLET_A = { macAddress: '11:22:33:44:55:01', name: 'room-101-tab', ipAddress: '10.0.50.11', type: 'WIRELESS', uplinkDeviceId: 'd1' };
+const TABLET_B = { macAddress: '11-22-33-44-55-02', name: 'room-102-tab', ipAddress: '10.0.50.12', type: 'WIRELESS', uplinkDeviceId: 'd1' };
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monitor-test-'));
 
 before(async () => {
   received = [];
   unifiState = 'ONLINE';
+  unifiClients = [TABLET_A];
+  unifiClientsFail = false;
   hook = http.createServer((req, res) => {
     let b = '';
     req.on('data', (c) => (b += c));
     req.on('end', () => {
       if (req.url === '/hook') received.push(JSON.parse(b));
       else if (req.url.startsWith('/proxy/network/integration/v1/sites?')) return res.end(JSON.stringify({ data: [{ id: 's1', internalReference: 'default', name: 'Default' }], totalCount: 1 }));
-      else if (req.url.startsWith('/proxy/network/integration/v1/sites/s1/devices')) {
+      else if (req.url.startsWith('/proxy/network/integration/v1/sites/s1/clients')) {
+        if (unifiClientsFail) { res.statusCode = 500; return res.end('boom'); }
+        return res.end(JSON.stringify({ data: unifiClients, totalCount: unifiClients.length }));
+      } else if (req.url.startsWith('/proxy/network/integration/v1/sites/s1/devices')) {
         assert.equal(req.headers['x-api-key'], 'k');
         return res.end(JSON.stringify({ data: [{ id: 'd1', name: 'Lobby AP', model: 'U7 Pro', macAddress: 'AA:BB:CC:00:11:22', ipAddress: '192.168.1.5', state: unifiState }], totalCount: 1 }));
       }
@@ -130,7 +148,9 @@ before(async () => {
       { id: 'printer', name: 'Printer', type: 'tcp', address: '127.0.0.1', port: closedPort, probeFailuresBeforeAlert: 2, probeIntervalSeconds: 0 },
     ],
     notifications: { webhook: { url: `${base}/hook` }, renotifyCriticalHours: 0 },
-    unifi: { url: base, apiKey: 'k', pollSeconds: 0, failuresBeforeAlert: 2, devices: { 'Lobby AP': { priority: 'critical' } } },
+    unifi: { url: base, apiKey: 'k', pollSeconds: 0, failuresBeforeAlert: 2, devices: { 'Lobby AP': { priority: 'critical' } },
+      clientDefaults: { offlineAfterMinutes: 0.02 },
+      clients: [{ mac: '11:22:33:44:55:01', name: 'Room 101 tablet' }, { mac: '112233445502', name: 'Room 102 tablet', priority: 'standard' }] },
     maintenance: [{ id: 'clean', name: 'Clean fans', intervalDays: 180 }],
   });
   app = await startServer({ config, dataDir, port: 0, host: '127.0.0.1', sweepMs: 0, adminPassword: 'correct horse battery', secureCookies: false, log: quiet });
@@ -261,6 +281,47 @@ test('UniFi: device going offline alerts after 2 polls, recovers', async () => {
   await app.sweep();
   await settle();
   assert.ok(take().some((x) => x.deviceId === 'unifi-aabbcc001122' && x.status === 'resolved'));
+});
+
+test('UniFi Wi-Fi clients: tablet off Wi-Fi alerts, recovers; a failed client list judges nothing', async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const open = (id) => app.db.prepare("SELECT * FROM alerts WHERE device_id = ? AND check_key = 'offline' AND resolved_at IS NULL").get(id);
+  await sleep(1300); // past offlineAfterMinutes (1.2 s) since server start
+  await app.sweep();
+  await settle();
+  assert.equal(open('wifi-112233445501'), undefined, 'connected tablet is fine');
+  const b = open('wifi-112233445502');
+  assert.ok(b, 'never-seen tablet alerts');
+  assert.equal(b.severity, 'warning'); // priority standard
+  assert.match(b.issue, /since monitoring started.*MAC address/);
+
+  unifiClients = [TABLET_A, TABLET_B];
+  await app.sweep();
+  await settle();
+  assert.equal(open('wifi-112233445502'), undefined, 'tablet back on Wi-Fi');
+  assert.ok(take().some((m) => m.deviceId === 'wifi-112233445502' && m.status === 'resolved'));
+  assert.equal(JSON.parse(app.db.prepare('SELECT extra FROM device_state WHERE id = ?').get('wifi-112233445502').extra).ap, 'Lobby AP');
+
+  // Client list unreadable while tablet A is gone: nothing is judged.
+  unifiClients = [TABLET_B];
+  unifiClientsFail = true;
+  await sleep(1300);
+  await app.sweep();
+  await settle();
+  assert.equal(open('wifi-112233445501'), undefined, 'no false offline when the client list fails');
+
+  unifiClientsFail = false;
+  await app.sweep();
+  await settle();
+  const a = open('wifi-112233445501');
+  assert.ok(a, 'tablet A off Wi-Fi');
+  assert.equal(a.severity, 'routine'); // default priority low: daily summary, no push
+  assert.match(a.issue, /Room 101 tablet has not been on Wi-Fi for \d+ minutes \(last seen on Lobby AP\)/);
+  assert.ok(!take().some((m) => m.deviceId === 'wifi-112233445501'), 'low priority never pushes');
+  unifiClients = [TABLET_A, TABLET_B];
+  await app.sweep();
+  await settle();
+  take();
 });
 
 test('dashboard API: login required, overview, maintenance log, ack, digest', async () => {

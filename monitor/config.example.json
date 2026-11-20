@@ -70,7 +70,14 @@
       "aa:bb:cc:dd:ee:ff": { "name": "Main gateway", "priority": "critical" },
       "Lobby AP": { "priority": "critical" },
       "Test AP": { "ignore": true }
-    }
+    },
+    "_clients_note": "Wi-Fi devices to watch, e.g. guest-room tablets. Get MACs from unifi-test. priority low = daily summary only; standard = push a Warning",
+    "clientDefaults": { "offlineAfterMinutes": 30, "priority": "low" },
+    "clients": [
+      { "mac": "aa:bb:cc:00:01:01", "name": "Room 101 tablet", "group": "Guest tablets" },
+      { "mac": "aa:bb:cc:00:01:02", "name": "Room 102 tablet", "group": "Guest tablets" },
+      { "mac": "aa:bb:cc:00:00:10", "name": "Front desk tablet", "priority": "standard", "offlineAfterMinutes": 15 }
+    ]
   },
 
   "maintenance": [

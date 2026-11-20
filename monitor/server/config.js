@@ -1,5 +1,6 @@
 // Loads config.json and fills in defaults so the rest of the code never has to guess.
 import fs from 'node:fs';
+import { normalizeMac } from './unifi.js';
 
 export const DEFAULTS = {
   checkinIntervalMinutes: 5,
@@ -14,6 +15,24 @@ export const DEFAULTS = {
 };
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+// critical: outages push as Critical; standard: as Warning; low: daily summary only (never buzzes the phone).
+const PRIORITIES = ['critical', 'standard', 'low'];
+
+// Wi-Fi clients (e.g. guest-room tablets) watched through UniFi: alert when one hasn't been connected for a while.
+function normalizeClients(u) {
+  const defaults = { offlineAfterMinutes: 30, priority: 'low', ...u.clientDefaults };
+  const seen = new Set();
+  return (u.clients || []).map((c) => {
+    const mac = normalizeMac(c.mac);
+    if (!mac) throw new Error(`UniFi client ${JSON.stringify(c.name || c.mac)}: "mac" must be a MAC address like aa:bb:cc:dd:ee:ff`);
+    if (seen.has(mac)) throw new Error(`UniFi client ${mac} is listed twice`);
+    seen.add(mac);
+    const out = { ...defaults, ...c, mac, name: c.name || mac };
+    if (!PRIORITIES.includes(out.priority)) throw new Error(`UniFi client ${out.name}: priority must be ${PRIORITIES.join(', ')}`);
+    if (!(out.offlineAfterMinutes > 0)) throw new Error(`UniFi client ${out.name}: offlineAfterMinutes must be a positive number`);
+    return out;
+  });
+}
 
 function merge(base, over) {
   const out = { ...base };
@@ -36,7 +55,7 @@ export function normalizeConfig(raw) {
     if (type !== 'agent' && !d.address) throw new Error(`Device ${d.id}: "address" is required for ${type} checks`);
     if (type === 'tcp' && !d.port) throw new Error(`Device ${d.id}: "port" is required for tcp checks`);
     const priority = d.priority || 'standard';
-    if (!['critical', 'standard'].includes(priority)) throw new Error(`Device ${d.id}: priority must be critical or standard`);
+    if (!PRIORITIES.includes(priority)) throw new Error(`Device ${d.id}: priority must be ${PRIORITIES.join(', ')}`);
     const backups = (d.backups || []).map((b) => {
       if (!b.name) throw new Error(`Device ${d.id}: every backup rule needs a name`);
       return { maxAgeHours: 26, ...b };
@@ -57,7 +76,7 @@ export function normalizeConfig(raw) {
       renotifyCriticalHours: n.renotifyCriticalHours ?? 4,
       recovery: n.recovery ?? true,
     },
-    unifi: raw.unifi ? { pollSeconds: 120, failuresBeforeAlert: 2, site: 'default', insecureTls: true, devices: {}, defaultPriority: 'standard', ...raw.unifi } : null,
+    unifi: raw.unifi ? { pollSeconds: 120, failuresBeforeAlert: 2, site: 'default', insecureTls: true, devices: {}, defaultPriority: 'standard', ...raw.unifi, clients: normalizeClients(raw.unifi) } : null,
     maintenance: (raw.maintenance || []).map((m) => {
       if (!ID_RE.test(m.id || '') || !(m.intervalDays > 0)) throw new Error(`Maintenance task needs an id and intervalDays: ${JSON.stringify(m)}`);
       return { devices: ['*'], ...m, name: m.name || m.id };

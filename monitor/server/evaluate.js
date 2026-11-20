@@ -13,9 +13,10 @@ export const SEVERITY_RANK = { ok: 0, routine: 1, warning: 2, critical: 3 };
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
 
-// Outage-type problems are Critical on business-critical devices, Warning elsewhere.
+// Outage-type problems are Critical on business-critical devices, Routine (daily summary) on
+// low-priority ones such as guest-room tablets, Warning elsewhere.
 export function outageSeverity(device) {
-  return device.priority === 'critical' ? 'critical' : 'warning';
+  return device.priority === 'critical' ? 'critical' : device.priority === 'low' ? 'routine' : 'warning';
 }
 
 function pct(n) {

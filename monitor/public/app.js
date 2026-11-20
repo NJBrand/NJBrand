@@ -111,13 +111,14 @@ function render() {
       ? h('div', { class: 'list' }, ...data.alerts.sort((a, b) => SEV.indexOf(a.severity) - SEV.indexOf(b.severity) || b.opened_at - a.opened_at).map(alertRow))
       : h('p', { class: 'muted' }, 'Nothing needs attention.'));
 
+  const TYPE_LABEL = { unifi: 'UniFi', wifi: 'Wi-Fi', agent: 'PC', ping: 'ping', tcp: 'TCP' };
   const order = { critical: 0, warning: 1, routine: 2, unknown: 3, ok: 4 };
   const devices = h('section', {}, h('h2', {}, 'Devices'),
     h('div', { class: 'list' }, ...[...data.devices].sort((a, b) => order[a.status] - order[b.status] || (a.priority === 'critical' ? -1 : 1) - (b.priority === 'critical' ? -1 : 1) || a.name.localeCompare(b.name)).map((d) =>
       h('button', { class: 'row', onclick: () => openDevice(d.id) },
         h('span', { class: `dot ${d.online === 0 ? 'critical' : d.status}`, 'aria-hidden': 'true' }),
         h('span', { class: 'grow' }, h('div', {}, h('b', {}, d.name), d.priority === 'critical' ? h('span', { class: 'badge critical gap' }, 'critical') : null),
-          h('div', { class: 'small muted' }, `${statusLabel(d)} · ${d.type === 'unifi' ? 'UniFi' : d.type} · seen ${ago(d.lastSeen)}`)),
+          h('div', { class: 'small muted' }, `${statusLabel(d)} · ${TYPE_LABEL[d.type] || d.type} · seen ${ago(d.lastSeen)}${d.type === 'wifi' && d.extra?.ap ? ` on ${d.extra.ap}` : ''}`)),
         d.type === 'agent' ? h('span', { class: 'metrics' }, h('span', {}, `CPU ${pct(d.cpu)}`), h('span', {}, `RAM ${pct(d.memory)}`), h('span', {}, `Disk free ${pct(d.minDiskFree)}`)) : null))));
 
   const maint = h('section', {}, h('h2', {}, 'Maintenance schedule'),

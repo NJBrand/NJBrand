@@ -22,6 +22,7 @@ your phone when something breaks, and keeps a history of equipment health and ma
 | Restart overdue | Up more than 30 days | Routine |
 | Backup failed / missed | Event-log success/failure IDs, or the newest file in a folder | Warning |
 | UniFi device offline / firmware | UniFi Network official API | Critical / Warning / Routine |
+| Tablet (or other Wi-Fi device) off Wi-Fi | Not in UniFi's connected-clients list for 30 min | Routine by default (`low`); Warning if `standard` |
 | Scheduled maintenance overdue | Your own tasks, e.g. clean fans every 180 days | Routine |
 
 **Notification rules:** Critical and Warning alerts push immediately, **once**, with a recovery message
@@ -44,6 +45,34 @@ Action: Investigate connectivity and system availability
 
 Use the same always-on machine as Vault (see `../DEPLOY.md`), or any always-on PC on the office network.
 It must be **on the office LAN** (or on Tailscale with the PCs) so agents can reach it.
+
+### On Windows
+
+1. Install **Node.js LTS** (22.13 or newer) from https://nodejs.org (defaults are fine).
+2. Give the PC a fixed IP (a DHCP reservation in UniFi is easiest), so the agents can always find it.
+3. Set the PC to never sleep: **Settings → System → Power → Sleep: Never**.
+4. Copy this repo to the PC, then in an **elevated PowerShell** in `monitor\deploy\windows`:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\NJMonitor-Server.ps1 install
+   ```
+   It prints the **dashboard admin password** once (also saved in `C:\ProgramData\NJMonitor-Server\server.env`)
+   and the dashboard address, e.g. `http://192.168.1.50:8090`.
+5. Edit `C:\ProgramData\NJMonitor-Server\config.json` (as Administrator: devices, ntfy topic, UniFi), then
+   `NJMonitor-Server.ps1 restart`. Restart is also how config changes take effect later.
+
+It runs as the **NJMonitor Server** scheduled task: starts at boot as SYSTEM, needs nobody logged in,
+and a 5-minute watchdog starts it again if it ever stops. The firewall rule only allows the local subnet.
+
+| Command (`NJMonitor-Server.ps1 …`) | Does |
+|---|---|
+| `install` | First install, and **update**: re-run after pulling new code. Keeps config, data and password |
+| `token <device-id>` | Prints the ready-to-paste `Install-Agent.ps1` command for a PC |
+| `status` / `logs` | Is it running and responding / last 50 log lines |
+| `restart` | Checks the config, then restarts (do this after editing config.json) |
+| `check-config` / `unifi-test` | Validate config / list UniFi devices and connected Wi-Fi clients |
+| `uninstall` | Removes the task and firewall rule; keeps config and history |
+
+### On Linux
 
 ```bash
 sudo useradd --system --home /var/lib/njmonitor --shell /usr/sbin/nologin njmonitor
@@ -99,6 +128,25 @@ block to `unifi`, fill in the console address and key, then run `npm run unifi-t
 devices. Mark important devices `critical` by MAC or name. All others default to `standard`.
 This uses Ubiquiti's official local API (UniFi Network 9+). It is tested against a simulated controller,
 **not yet against a real one**, so run `unifi-test` first.
+
+### Tablets and other Wi-Fi devices (e.g. guest-room tablets)
+
+Anything on the UniFi Wi-Fi can be watched, with nothing installed on it. UniFi lists the clients that are
+connected right now; a watched client that is missing for longer than `offlineAfterMinutes` (default 30,
+so a tablet dozing off doesn't alert) raises **"Not connected to Wi-Fi"**, and it clears when it reconnects.
+
+1. Run `unifi-test`: it prints every connected client with its MAC, IP and access point.
+2. Add each tablet to `unifi.clients` with its MAC and a name (see `_unifi_example`), then restart.
+3. Priority: **`low`** (default) puts offline tablets in the daily summary only, so a guest unplugging one
+   overnight doesn't buzz your phone. Use **`standard`** for ones you want pushed right away (e.g. the front desk).
+
+On each tablet, so its MAC stays the same and it stays connected:
+- **Turn off the private / random Wi-Fi address** for your network (iPad: Settings → Wi-Fi → ⓘ → Private Wi-Fi
+  Address: Off. Android: Wi-Fi → network → Privacy → Use device MAC). Otherwise it can change MAC and look offline.
+- **Keep Wi-Fi on while asleep** and keep it plugged in. Kiosk apps usually do this already.
+
+If the client list can't be read, tablets are not judged at all (no false "every tablet offline"),
+and you get one "UniFi client list unavailable" alert instead.
 
 ## Who monitors the monitor?
 

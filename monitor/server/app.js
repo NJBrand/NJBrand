@@ -11,7 +11,7 @@ import { evaluateReport, outageSeverity, SEVERITY_RANK } from './evaluate.js';
 import { createAlertEngine } from './alerts.js';
 import { createNotifier, formatTime } from './notify.js';
 import { probeDevice } from './probes.js';
-import { fetchUnifiDevices, unifiId } from './unifi.js';
+import { fetchUnifi, fetchUnifiClients, unifiId, wifiId } from './unifi.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC = path.join(ROOT, 'public');
@@ -145,9 +145,9 @@ export async function startServer(opts = {}) {
     if (!u || t < nextUnifi) return;
     nextUnifi = t + u.pollSeconds * 1000;
     const ctrl = { id: 'unifi-controller', name: 'UniFi controller', priority: 'standard' };
-    let list;
+    let list, site;
     try {
-      list = await fetchUnifiDevices(u);
+      ({ devices: list, site } = await fetchUnifi(u));
     } catch (e) {
       log.error(`UniFi poll failed: ${e.message}`);
       upsertState.run(ctrl.id, 'unifi', ctrl.name, null, 0, null, JSON.stringify({ error: e.message }));
@@ -166,6 +166,49 @@ export async function startServer(opts = {}) {
         ? { key: 'offline', ok: false, severity: outageSeverity(dev), confirm: u.failuresBeforeAlert, title: 'Network device offline', issue: `UniFi reports ${dev.name}${d.model ? ` (${d.model})` : ''} as ${d.state}`, action: 'Check power and cabling to the device; check its uplink switch port' }
         : { key: 'offline', ok: true });
       engine.apply(id, { key: 'firmware', ok: !d.firmwareUpdatable, severity: 'routine', confirm: 1, title: 'Firmware update available', issue: `A firmware update is available for ${dev.name}`, action: 'Update from the UniFi console during a maintenance window' });
+    }
+    if (u.clients.length) await checkWifiClients(t, u, site, list);
+  }
+
+  // Watched Wi-Fi clients (guest-room tablets etc.). UniFi only lists clients that are connected right now,
+  // so "offline" means "not in the list for longer than offlineAfterMinutes" (tablets drop off Wi-Fi briefly
+  // when they sleep). If the client list can't be read, nothing is judged: no false "all tablets offline".
+  async function checkWifiClients(t, u, site, unifiDevices) {
+    const ctrl = 'unifi-controller';
+    let connected;
+    try {
+      connected = new Map((await fetchUnifiClients(u, site)).map((c) => [c.mac, c]));
+    } catch (e) {
+      log.error(`UniFi client list failed: ${e.message}`);
+      engine.apply(ctrl, { key: 'clients', ok: false, severity: 'warning', confirm: u.failuresBeforeAlert, title: 'UniFi client list unavailable', issue: `Cannot read connected Wi-Fi clients, so tablets are not being checked: ${e.message.slice(0, 200)}`, action: 'Check the UniFi API key still has access, and update UniFi Network if it is older than 9.x' });
+      return;
+    }
+    engine.apply(ctrl, { key: 'clients', ok: true });
+    const apName = new Map(unifiDevices.filter((d) => d.id).map((d) => [d.id, d.name]));
+    for (const c of u.clients) {
+      const id = wifiId(c.mac);
+      const dev = { id, name: c.name, priority: c.priority, type: 'wifi' };
+      const live = connected.get(c.mac);
+      if (live) {
+        const ap = apName.get(live.uplinkDeviceId) || null;
+        upsertState.run(id, 'wifi', c.name, now(), 1, null, JSON.stringify({ mac: c.mac, ip: live.ip, ap, connectedAt: live.connectedAt, group: c.group || null }));
+        engine.apply(id, { key: 'offline', ok: true });
+        continue;
+      }
+      const s = getState.get(id);
+      // Like agents: after a server restart, give every client a full window before judging it.
+      const silentMin = (t - Math.max(s?.last_seen || 0, startedAt)) / 60_000;
+      if (silentMin <= c.offlineAfterMinutes) continue;
+      upsertState.run(id, 'wifi', c.name, null, 0, null, s?.extra ? null : JSON.stringify({ mac: c.mac, group: c.group || null }));
+      const lastAp = s?.extra ? JSON.parse(s.extra).ap : null;
+      engine.apply(id, {
+        key: 'offline', ok: false, severity: outageSeverity(dev), confirm: 1,
+        title: 'Not connected to Wi-Fi',
+        issue: s?.last_seen
+          ? `${c.name} has not been on Wi-Fi for ${Math.round((t - s.last_seen) / 60_000)} minutes${lastAp ? ` (last seen on ${lastAp})` : ''}`
+          : `${c.name} has not been seen on Wi-Fi since monitoring started. Check its MAC address in the config, and that the tablet's private (random) Wi-Fi address is turned off for this network`,
+        action: 'Check the tablet is plugged in, switched on and has Wi-Fi on; reconnect it to the network if needed',
+      });
     }
   }
 
@@ -303,6 +346,7 @@ export async function startServer(opts = {}) {
       const ex = s.extra ? JSON.parse(s.extra) : {};
       list.push({ id: s.id, name: s.name, type: 'unifi', priority: ex.priority || 'standard' });
     }
+    for (const c of config.unifi?.clients || []) list.push({ id: wifiId(c.mac), name: c.name, type: 'wifi', priority: c.priority, group: c.group || null });
     return list;
   }
 
