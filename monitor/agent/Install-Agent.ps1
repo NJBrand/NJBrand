@@ -30,7 +30,9 @@ if ($Uninstall) {
 
 New-Item -ItemType Directory -Path $Dir -Force | Out-Null
 # Lock the folder down: it holds this device's token. SYSTEM + Administrators only.
-& icacls $Dir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' | Out-Null
+# Well-known SIDs, not names: "SYSTEM"/"Administrators" are localized on non-English Windows.
+& icacls $Dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls failed to secure $Dir (exit $LASTEXITCODE)" }
 
 Copy-Item -Path (Join-Path $PSScriptRoot 'NJMonitor-Agent.ps1') -Destination $Dir -Force
 [ordered]@{ serverUrl = $ServerUrl.TrimEnd('/'); deviceId = $DeviceId; token = $Token } | ConvertTo-Json | Set-Content -Path "$Dir\agent.json" -Encoding UTF8
@@ -38,9 +40,11 @@ Copy-Item -Path (Join-Path $PSScriptRoot 'NJMonitor-Agent.ps1') -Destination $Di
 # Connectivity test before scheduling, so mistakes show up now rather than as a silent "offline" later.
 Write-Host "Testing connection to $ServerUrl ..."
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$Dir\NJMonitor-Agent.ps1"
+$exit = $LASTEXITCODE
 $log = "$Dir\agent.log"
-if ((Test-Path $log) -and (Select-String -Path $log -Pattern 'send failed' -Quiet) -and ((Get-Item $log).LastWriteTime -gt (Get-Date).AddMinutes(-2))) {
-  Write-Warning ("Check-in failed. Last log line: " + (Get-Content $log -Tail 1))
+if ($exit -ne 0) {
+  $last = if (Test-Path $log) { Get-Content $log -Tail 1 } else { '(no log written)' }
+  Write-Warning "Check-in failed (exit $exit). Last log line: $last"
   Write-Warning 'Fix the server URL / token / firewall, then run this installer again.'
   exit 1
 }

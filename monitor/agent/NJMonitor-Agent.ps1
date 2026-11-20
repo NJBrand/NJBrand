@@ -12,7 +12,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '0.1.0'
+$AgentVersion = '0.2.0'
 $StateDir = Split-Path $ConfigPath
 $WatchFile = Join-Path $StateDir 'watch.json'
 $StateFile = Join-Path $StateDir 'state.json'
@@ -35,13 +35,30 @@ function Iso($dt) { if ($null -eq $dt) { return $null } ; return ([datetime]$dt)
 
 # Each collector is isolated: one failing check must never stop the report.
 function Try-Collect([string]$name, [scriptblock]$block) {
-  try { return & $block } catch { Write-Log "collector $name failed: $($_.Exception.Message)"; return $null }
+  # Return nothing (not $null) on failure: @(Try-Collect ...) then yields [] instead of [null], which the server can't read.
+  try { return & $block } catch { Write-Log "collector $name failed: $($_.Exception.Message)"; return }
 }
+
+# Get-WinEvent throws when nothing matches. Treat that as "no events", but let real errors through
+# (missing log/provider, access denied) so they show up instead of looking like "no backup found".
+function Get-Events([hashtable]$filter, [int]$max = 0) {
+  try {
+    if ($max) { Get-WinEvent -FilterHashtable $filter -MaxEvents $max -ErrorAction Stop }
+    else { Get-WinEvent -FilterHashtable $filter -ErrorAction Stop }
+  } catch {
+    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { return }
+    throw
+  }
+}
+
+function To-Date($s) { if (-not $s) { return $null }; try { return [datetime]$s } catch { return $null } }
 
 $config = Read-Json $ConfigPath $null
 if (-not $config -and -not $DryRun) { Write-Log "No config at $ConfigPath. Run Install-Agent.ps1."; exit 1 }
 $watch = Read-Json $WatchFile ([pscustomobject]@{ services = @(); eventChecks = @(); fileChecks = @() })
-$state = Read-Json $StateFile ([pscustomobject]@{ lastShutdownScan = $null; updatesCheckedAt = $null; updates = $null })
+# Rebuild state with every field present, so an old or partial state.json can't break property assignment.
+$saved = Read-Json $StateFile $null
+$state = [pscustomobject]@{ lastShutdownScan = $saved.lastShutdownScan; updatesCheckedAt = $saved.updatesCheckedAt; updates = $saved.updates }
 
 $os = Get-CimInstance Win32_OperatingSystem
 $report = [ordered]@{
@@ -87,16 +104,29 @@ $report.services = @(Try-Collect 'services' {
 # ---- Unexpected shutdowns since the last scan
 #   41   Kernel-Power: rebooted without cleanly shutting down (power loss, crash, hard power-off)
 #   6008 EventLog: the previous system shutdown was unexpected
-$scanFrom = if ($state.lastShutdownScan) { [datetime]$state.lastShutdownScan } else { (Get-Date).AddDays(-1) }
+#   One crash usually logs BOTH, seconds apart. Report the 41 and drop a 6008 that has a 41 within 10 minutes,
+#   checked against the whole log so a pair split across two check-ins still alerts once.
+$scanFrom = To-Date $state.lastShutdownScan
+if (-not $scanFrom) { $scanFrom = (Get-Date).AddDays(-1) }
 $scanTo = Get-Date
-$report.shutdowns = @(Try-Collect 'shutdowns' {
-  Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 41, 6008; StartTime = $scanFrom } -ErrorAction SilentlyContinue |
+$shutdownScanOk = $true
+$report.shutdowns = @(try {
+  Get-Events @{ LogName = 'System'; Id = 41, 6008; StartTime = $scanFrom; EndTime = $scanTo } |
     Where-Object { ($_.Id -eq 41 -and $_.ProviderName -eq 'Microsoft-Windows-Kernel-Power') -or ($_.Id -eq 6008 -and $_.ProviderName -eq 'EventLog') } |
+    Where-Object {
+      $_.Id -eq 41 -or -not (Get-Events @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Power'; Id = 41
+          StartTime = $_.TimeCreated.AddMinutes(-10); EndTime = $_.TimeCreated.AddMinutes(10) } 1)
+    } |
     ForEach-Object { [ordered]@{ time = Iso $_.TimeCreated; id = $_.Id; provider = $_.ProviderName } }
+} catch {
+  # Don't advance the scan window past events we failed to read.
+  $shutdownScanOk = $false
+  Write-Log "collector shutdowns failed: $($_.Exception.Message)"
 })
 
 # ---- Windows Update (slow: query at most every 6 hours, cache the result)
-$needUpdateScan = -not $state.updatesCheckedAt -or ((Get-Date) - [datetime]$state.updatesCheckedAt).TotalHours -ge 6
+$lastUpdateScan = To-Date $state.updatesCheckedAt
+$needUpdateScan = -not $lastUpdateScan -or -not $state.updates -or ((Get-Date) - $lastUpdateScan).TotalHours -ge 6
 $rebootRequired = Try-Collect 'reboot' {
   (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') -or
   (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')
@@ -115,14 +145,17 @@ if ($needUpdateScan) {
   }
   try {
     $last = (New-Object -ComObject Microsoft.Update.AutoUpdate).Results.LastInstallationSuccessDate
-    $updates.lastInstallSuccess = if ($last -and ([datetime]$last).Year -gt 2000) { Iso $last } else { $null }
+    # WUA returns this date in UTC but with Kind=Unspecified; ToUniversalTime() would shift it by the local offset.
+    $updates.lastInstallSuccess = if ($last -and ([datetime]$last).Year -gt 2000) { Iso ([datetime]::SpecifyKind([datetime]$last, 'Utc')) } else { $null }
   } catch { }
   $state.updates = $updates
   $state.updatesCheckedAt = (Get-Date).ToString('o')  # ISO string: PS 5.1 can't parse its own DateTime JSON
 }
 if ($state.updates) {
+  # Fresh scan: an ordered dictionary. Cached in state.json: a PSCustomObject. Copy keys from either.
   $u = [ordered]@{}
-  $state.updates.PSObject.Properties | ForEach-Object { $u[$_.Name] = $_.Value }
+  if ($state.updates -is [System.Collections.IDictionary]) { foreach ($k in $state.updates.Keys) { $u[$k] = $state.updates[$k] } }
+  else { $state.updates.PSObject.Properties | ForEach-Object { $u[$_.Name] = $_.Value } }
   $u.rebootRequired = [bool]$rebootRequired
   $report.updates = $u
 }
@@ -135,13 +168,13 @@ $report.eventChecks = @(foreach ($c in @($watch.eventChecks)) {
     $since = (Get-Date).AddHours(-$lookback)
     $base = @{ LogName = $c.logName; StartTime = $since }
     if ($c.providerName) { $base.ProviderName = $c.providerName }
-    $ok = if (@($c.successIds).Count) { Get-WinEvent -FilterHashtable ($base + @{ Id = @($c.successIds) }) -MaxEvents 1 -ErrorAction SilentlyContinue } else { $null }
-    $bad = if (@($c.failureIds).Count) { Get-WinEvent -FilterHashtable ($base + @{ Id = @($c.failureIds) }) -MaxEvents 1 -ErrorAction SilentlyContinue } else { $null }
+    $ok = if (@($c.successIds).Count) { Get-Events ($base + @{ Id = @($c.successIds) }) 1 } else { $null }
+    $bad = if (@($c.failureIds).Count) { Get-Events ($base + @{ Id = @($c.failureIds) }) 1 } else { $null }
     [ordered]@{
       name           = $c.name
       lastSuccess    = if ($ok) { Iso $ok.TimeCreated } else { $null }
       lastFailure    = if ($bad) { Iso $bad.TimeCreated } else { $null }
-      failureMessage = if ($bad) { ($bad.Message -split "`n")[0] } else { $null }
+      failureMessage = if ($bad) { ($bad.Message -split "\r?\n")[0].Trim() } else { $null }
     }
   } catch {
     [ordered]@{ name = $c.name; error = $_.Exception.Message }
@@ -168,15 +201,22 @@ if ($DryRun) {
 }
 
 # ---- Send
+$sent = $false
 try {
-  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  $resp = Invoke-RestMethod -Method Post -Uri ("{0}/api/agent/checkin" -f $config.serverUrl.TrimEnd('/')) -TimeoutSec 30 `
+  # Add TLS 1.2 without dropping whatever the OS already enables.
+  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  # -UseBasicParsing: Windows 11 has no IE engine, and SYSTEM never ran IE first-run setup.
+  $resp = Invoke-RestMethod -Method Post -Uri ("{0}/api/agent/checkin" -f $config.serverUrl.TrimEnd('/')) -TimeoutSec 30 -UseBasicParsing `
     -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) `
     -Headers @{ Authorization = "Bearer $($config.token)"; 'X-Device-Id' = $config.deviceId }
+  $sent = $true
   if ($resp.watch) { $resp.watch | ConvertTo-Json -Depth 6 | Set-Content -Path $WatchFile -Encoding UTF8 }
   # Only advance the shutdown scan window after a successful send, so events are never lost.
-  $state.lastShutdownScan = $scanTo.ToString('o')
+  if ($shutdownScanOk) { $state.lastShutdownScan = $scanTo.ToString('o') }
 } catch {
   Write-Log "send failed: $($_.Exception.Message)"
 }
 $state | ConvertTo-Json -Depth 6 | Set-Content -Path $StateFile -Encoding UTF8
+# Non-zero exit on a failed send: shows in Task Scheduler's "Last Run Result" and lets the installer test it.
+if (-not $sent) { exit 2 }
+exit 0

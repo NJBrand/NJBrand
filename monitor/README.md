@@ -16,7 +16,7 @@ your phone when something breaks, and keeps a history of equipment health and ma
 | Low disk space | ≤15% free → Warning, ≤5% → **Critical** | Warning / Critical |
 | High CPU / memory | ≥90% sustained for 15 min (3 check-ins in a row) | Warning |
 | Critical service stopped | Services you list per device, stopped for 2 check-ins | Critical / Warning |
-| Unexpected restart | Event ID 41 (Kernel-Power) and 6008 | Warning (one-off event) |
+| Unexpected restart | Event ID 41 (Kernel-Power) or 6008; one crash logs both, reported once | Warning (one-off event) |
 | Windows updates pending / restart pending | Windows Update API, at most every 6 h | Routine (daily summary) |
 | Updates not installing | No successful install in 35 days | Warning |
 | Restart overdue | Up more than 30 days | Routine |
@@ -77,10 +77,11 @@ On iPhone, allow ntfy's *Time Sensitive* notifications so Critical alerts get th
 2. On the server: `CONFIG=/etc/njmonitor/config.json DATA_DIR=/var/lib/njmonitor npm run token -- front-desk-1`
 3. Copy the `agent` folder to the PC. In an **elevated PowerShell**:
    ```powershell
-   .\NJMonitor-Agent.ps1 -DryRun     # first: see exactly what it collects, nothing is sent
+   powershell -ExecutionPolicy Bypass -File .\NJMonitor-Agent.ps1 -DryRun   # first: see exactly what it collects, nothing is sent
    powershell -ExecutionPolicy Bypass -File .\Install-Agent.ps1 -ServerUrl http://192.168.1.10:8090 -DeviceId front-desk-1 -Token <token>
    ```
 The installer does a test check-in and refuses to schedule the task if it fails. Log: `C:\ProgramData\NJMonitor\agent.log`.
+The agent exits `0` after a successful check-in and `2` when the send fails, so Task Scheduler's **Last Run Result** shows `0x2` on a PC that can't reach the server.
 
 Find a service's real name with `Get-Service | Out-GridView` (use the **Name** column, e.g. `Spooler`, not "Print Spooler").
 
@@ -113,6 +114,6 @@ npm test     # rule engine unit tests + end-to-end: real server, simulated agent
 
 ## Known limits
 
-- The **PowerShell agent has not yet been run on a real Windows PC.** Run `-DryRun` on one machine first.
+- The agent has been tested on Windows 11 Home (PowerShell 5.1): `-DryRun` unelevated and elevated, plus real check-ins against a local server. The scheduled task (running as SYSTEM) has not been run yet, so after installing on the first PC, confirm it shows up on the dashboard and check `agent.log`.
 - Agents send their token over plain HTTP on the LAN. Fine on a trusted office network. Use HTTPS (Caddy/Tailscale) if the network has untrusted devices.
 - Config changes need a service restart.

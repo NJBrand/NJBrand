@@ -64,6 +64,18 @@ test('unexpected shutdowns become one-shot events', () => {
   assert.match(r.events[0].issue, /power loss/);
 });
 
+test('a 41 + 6008 pair from one crash is one event; a lone 6008 still alerts', () => {
+  // real pair captured on Windows 11: 41 at boot, 6008 22 s later
+  const pair = [{ time: '2026-11-16T16:38:47.6188885Z', id: 41 }, { time: '2026-11-16T16:39:09.1965567Z', id: 6008 }];
+  const r = evaluateReport(pc, { shutdowns: [...pair, { time: '2026-11-05T01:34:00Z', id: 6008 }] }, T);
+  assert.deepEqual(r.events.map((e) => e.key), ['restart:2026-11-16T16:38:47.6188885Z', 'restart:2026-11-05T01:34:00Z']);
+});
+
+test('malformed report entries are ignored, not fatal', () => {
+  const r = evaluateReport(pc, { services: [null, { name: 'Spooler', status: 'Running' }], disks: [null], shutdowns: [null] }, T);
+  assert.equal(keyed(r)['service:spooler'].ok, true);
+});
+
 test('alert message matches the agreed format', () => {
   const m = formatAlert('open', { device_id: 'pc', severity: 'critical', title: 'Computer offline', issue: 'Computer not responding', action: 'Investigate connectivity and system availability', opened_at: T }, pc, { now: T, timezone: 'America/New_York', lastSeen: Date.parse('2026-11-20T15:42:00Z') });
   assert.equal(m.title, 'IT ALERT — Front Desk PC: Computer offline');

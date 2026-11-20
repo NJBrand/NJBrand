@@ -73,7 +73,7 @@ export function evaluateReport(device, report, now) {
   }
 
   // ---- Critical Windows services ----
-  const reported = new Map((Array.isArray(report.services) ? report.services : []).map((s) => [String(s.name).toLowerCase(), s]));
+  const reported = new Map((Array.isArray(report.services) ? report.services : []).filter((s) => s && s.name).map((s) => [String(s.name).toLowerCase(), s]));
   for (const name of device.services) {
     const s = reported.get(name.toLowerCase());
     if (!s) continue; // agent hasn't picked up the watch list yet
@@ -152,8 +152,12 @@ export function evaluateReport(device, report, now) {
   }
 
   // ---- Unexpected restarts (one-shot events) ----
-  for (const e of Array.isArray(report.shutdowns) ? report.shutdowns : []) {
-    if (!e || !e.time) continue;
+  // Windows logs both Kernel-Power 41 and EventLog 6008 for one crash, seconds apart. Keep the 41;
+  // drop a 6008 within 10 minutes of a 41 so one restart is one alert. (Agents >= 0.2.0 also do this.)
+  const shutdowns = (Array.isArray(report.shutdowns) ? report.shutdowns : []).filter((e) => e && e.time);
+  const kp41 = shutdowns.filter((e) => e.id === 41).map((e) => Date.parse(e.time)).filter(Number.isFinite);
+  for (const e of shutdowns) {
+    if (e.id === 6008 && kp41.some((t) => Math.abs(t - Date.parse(e.time)) <= 10 * 60_000)) continue;
     const kind = e.id === 41 ? 'rebooted without shutting down cleanly (power loss, crash or forced power-off)' : 'shut down unexpectedly';
     events.push({
       key: `restart:${e.time}`,
