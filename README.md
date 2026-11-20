@@ -20,9 +20,14 @@ npm test           # end-to-end tests: real server, real crypto, multiple users
 | `PORT` / `HOST` | `8080` / `127.0.0.1` | Listen address. Keep it on localhost and put a TLS proxy in front. |
 | `DATA_DIR` | `./data` | SQLite database + server secret. **Back this up.** |
 | `TRUST_PROXY` | off | Set `1` behind a reverse proxy so rate limits use `X-Forwarded-For`. |
+| `BACKUP_DIR` | `$DATA_DIR/backups` | Where automatic backups go. Point it at an off-machine/synced folder. |
+| `BACKUP_INTERVAL_HOURS` / `BACKUP_KEEP` | `24` / `14` | Backup frequency and how many to retain. `BACKUP_DISABLED=1` turns them off. |
 | `INSECURE_COOKIES` | off | Set `1` *only* for plain-HTTP testing on a non-localhost host. |
 
-### Production deployment (required: HTTPS)
+**Hosting, phone access and backups: see [DEPLOY.md](DEPLOY.md).** The recommended setup is an always-on
+home machine reachable privately through Tailscale. The app installs to your phone's home screen.
+
+### Public deployment (HTTPS required)
 
 Browsers only expose WebCrypto on HTTPS (or `localhost`), and the session cookie is `Secure`.
 The simplest setup is [Caddy](https://caddyserver.com), which gets certificates automatically:
@@ -53,7 +58,7 @@ Then run the app with `TRUST_PROXY=1 npm start` under systemd (or similar), and 
 | CSRF | SameSite=Strict, plus a required custom header, plus an Origin check |
 | XSS | Strict CSP (`script-src 'self'`, no inline). The UI never uses `innerHTML`. Only `http(s)` links are clickable |
 | Abuse | Per-IP and per-account rate limits on login/registration. Account enumeration is resisted at login (fake salts) |
-| Client | Auto-lock after 10 min idle (keys wiped from memory). Clipboard cleared 30 s after copy |
+| Client | Auto-lock after 10 min idle, or after 2 min in the background on phones (keys wiped from memory). Clipboard cleared 30 s after copy |
 | Access control | Server-enforced roles. Writes with a stale vault key are rejected |
 
 ### Honest limitations: read these
@@ -72,6 +77,7 @@ Then run the app with `TRUST_PROXY=1 npm start` under systemd (or similar), and 
 ```
 server/server.js     HTTP API, auth, sessions, access control, static files (whitelisted)
 server/db.js         SQLite schema
+server/backup.js     Online snapshots, verification, retention; backup-cli.js for backup/restore
 public/js/crypto.js  All cryptography (WebCrypto)
 public/js/client.js  Vault client: account, vault, item and sharing flows (shared by UI and tests)
 public/js/app.js     UI

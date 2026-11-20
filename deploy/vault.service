@@ -1,0 +1,43 @@
+# /etc/systemd/system/vault.service
+# Install:  sudo cp deploy/vault.service /etc/systemd/system/ && sudo systemctl enable --now vault
+# Logs:     journalctl -u vault -f
+[Unit]
+Description=Vault password manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vault
+Group=vault
+WorkingDirectory=/opt/vault
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/server.js
+Environment=HOST=127.0.0.1
+Environment=PORT=8080
+Environment=DATA_DIR=/var/lib/vault
+Environment=TRUST_PROXY=1
+# Point this at a folder that is synced off the machine (NAS, Syncthing, rclone mount...)
+Environment=BACKUP_DIR=/var/lib/vault/backups
+Environment=BACKUP_INTERVAL_HOURS=24
+Environment=BACKUP_KEEP=30
+Restart=on-failure
+RestartSec=5
+
+# Sandboxing
+StateDirectory=vault
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/vault
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+[Install]
+WantedBy=multi-user.target

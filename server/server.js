@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { openDatabase, tx } from './db.js';
+import { backupDatabase, startBackupSchedule } from './backup.js';
 
 const scrypt = promisify(crypto.scrypt);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -135,7 +136,7 @@ function securityHeaders(res, secure) {
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; " +
-      "font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      "font-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   );
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -166,7 +167,7 @@ function parseCookies(header = '') {
 }
 
 // ---------------- app ----------------
-export function createApp({ dbFile = ':memory:', dataDir = null, secureCookies = true, trustProxy = false } = {}) {
+export function createApp({ dbFile = ':memory:', dataDir = null, secureCookies = true, trustProxy = false, backup = null } = {}) {
   const db = openDatabase(dbFile);
   const serverSecret = loadServerSecret(dataDir);
   const cookieName = secureCookies ? '__Host-sid' : 'sid';
@@ -218,7 +219,9 @@ export function createApp({ dbFile = ':memory:', dataDir = null, secureCookies =
   function clientIp(req) {
     if (trustProxy) {
       const xff = req.headers['x-forwarded-for'];
-      if (typeof xff === 'string' && xff) return xff.split(',')[0].trim();
+      // Use the entry appended by our own proxy (the last one). Earlier entries are
+      // client-supplied and could be forged to dodge rate limits.
+      if (typeof xff === 'string' && xff) return xff.split(',').pop().trim();
     }
     return req.socket.remoteAddress || 'unknown';
   }
@@ -600,6 +603,11 @@ export function createApp({ dbFile = ':memory:', dataDir = null, secureCookies =
     '/js/client.js': ['js/client.js', 'text/javascript; charset=utf-8'],
     '/js/crypto.js': ['js/crypto.js', 'text/javascript; charset=utf-8'],
     '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
+    '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
+    '/icons/icon-192.png': ['icons/icon-192.png', 'image/png'],
+    '/icons/icon-512.png': ['icons/icon-512.png', 'image/png'],
+    '/icons/maskable-512.png': ['icons/maskable-512.png', 'image/png'],
+    '/icons/apple-touch-icon.png': ['icons/apple-touch-icon.png', 'image/png'],
   };
   const staticCache = new Map();
   for (const [p, [file, type]] of Object.entries(STATIC)) {
@@ -662,7 +670,12 @@ export function createApp({ dbFile = ':memory:', dataDir = null, secureCookies =
   });
   server.headersTimeout = 20_000;
   server.requestTimeout = 60_000;
-  server.on('close', () => db.close());
+  const stopBackups = backup ? startBackupSchedule(db, backup) : () => {};
+  server.backupNow = () => backupDatabase(db, backup.dir, backup.keep ?? 14);
+  server.on('close', () => {
+    stopBackups();
+    db.close();
+  });
   return server;
 }
 
@@ -677,9 +690,18 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     dataDir,
     secureCookies,
     trustProxy: process.env.TRUST_PROXY === '1',
+    backup:
+      process.env.BACKUP_DISABLED === '1'
+        ? null
+        : {
+            dir: path.resolve(process.env.BACKUP_DIR || path.join(dataDir, 'backups')),
+            intervalHours: Number(process.env.BACKUP_INTERVAL_HOURS || 24),
+            keep: Number(process.env.BACKUP_KEEP || 14),
+          },
   });
   server.listen(port, host, () => {
     console.log(`Vault server listening on http://${host}:${port}`);
+    if (process.env.BACKUP_DISABLED === '1') console.warn('WARNING: automatic backups are disabled.');
     if (!secureCookies) console.warn('WARNING: INSECURE_COOKIES=1. Only use this for local development.');
   });
 }

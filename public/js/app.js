@@ -97,6 +97,14 @@ function resetIdle() {
 }
 ['pointerdown', 'keydown'].forEach((e) => document.addEventListener(e, resetIdle, { passive: true }));
 
+// Phones suspend timers in the background, so also check elapsed time when the app
+// comes back. Leaving the app for 2+ minutes locks it (covers a lost/borrowed phone).
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) hiddenAt = Date.now();
+  else if (client.unlocked && hiddenAt && Date.now() - hiddenAt > 2 * 60 * 1000) lockNow();
+});
+
 function lockNow() {
   client.lock();
   Object.assign(state, { items: [], itemId: null, editing: null, members: [] });
