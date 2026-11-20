@@ -1,0 +1,12 @@
+{
+  "name": "njbrand-vault",
+  "version": "1.0.0",
+  "description": "Zero-knowledge, end-to-end encrypted password manager with shared vaults",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  }
+}
