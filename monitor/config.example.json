@@ -1,0 +1,83 @@
+{
+  "timezone": "America/New_York",
+
+  "defaults": {
+    "checkinIntervalMinutes": 5,
+    "offlineAfterMinutes": 10,
+    "maxUptimeDays": 30,
+    "disk":    { "warnPercentFree": 15, "criticalPercentFree": 5 },
+    "cpu":     { "warnPercent": 90, "sustainedMinutes": 15 },
+    "memory":  { "warnPercent": 90, "sustainedMinutes": 15 },
+    "updates": { "maxDaysSinceInstall": 35 }
+  },
+
+  "devices": [
+    {
+      "id": "front-desk-1",
+      "name": "Front Desk PC",
+      "priority": "critical",
+      "offlineAfterMinutes": 6,
+      "services": ["Spooler"]
+    },
+    {
+      "id": "office-server",
+      "name": "Office Server",
+      "priority": "critical",
+      "disk": { "warnPercentFree": 20 },
+      "services": ["LanmanServer", "Spooler"],
+      "backups": [
+        {
+          "name": "Windows Server Backup",
+          "type": "event",
+          "logName": "Microsoft-Windows-Backup",
+          "providerName": "Microsoft-Windows-Backup",
+          "successIds": [4],
+          "failureIds": [5, 8, 9, 17, 22, 49, 50, 52, 100, 517, 518, 521, 527, 528, 544, 545, 546, 561, 564, 612],
+          "maxAgeHours": 26
+        },
+        {
+          "name": "Nightly file copy",
+          "type": "file",
+          "path": "D:\\Backups",
+          "maxAgeHours": 26
+        }
+      ]
+    },
+    { "id": "back-office-1", "name": "Back Office PC" },
+
+    { "id": "office-printer", "name": "Office Printer", "type": "ping", "address": "192.168.1.50" },
+    { "id": "nas", "name": "NAS (web UI)", "type": "tcp", "address": "192.168.1.20", "port": 443, "priority": "critical" }
+  ],
+
+  "notifications": {
+    "ntfy": { "server": "https://ntfy.sh", "topic": "CHANGE-ME-to-a-long-random-string", "token": null },
+    "pushover": null,
+    "webhook": null,
+    "digestTime": "07:30",
+    "renotifyCriticalHours": 4,
+    "recovery": true
+  },
+
+  "unifi": null,
+  "_unifi_example": {
+    "url": "https://192.168.1.1",
+    "apiKey": "paste-key-from-UniFi-Settings-Control-Plane-Integrations",
+    "site": "default",
+    "insecureTls": true,
+    "pollSeconds": 120,
+    "defaultPriority": "standard",
+    "devices": {
+      "aa:bb:cc:dd:ee:ff": { "name": "Main gateway", "priority": "critical" },
+      "Lobby AP": { "priority": "critical" },
+      "Test AP": { "ignore": true }
+    }
+  },
+
+  "maintenance": [
+    { "id": "physical-clean", "name": "Clean dust from fans and vents", "intervalDays": 180 },
+    { "id": "backup-restore-test", "name": "Test-restore a file from backup", "intervalDays": 90, "devices": ["office-server"] },
+    { "id": "ups-check", "name": "Check UPS battery / self-test", "intervalDays": 180, "devices": ["office-server", "front-desk-1"] }
+  ],
+
+  "heartbeatUrl": null
+}

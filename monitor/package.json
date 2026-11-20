@@ -1,0 +1,15 @@
+{
+  "name": "njbrand-it-monitor",
+  "version": "0.1.0",
+  "description": "Self-hosted IT monitoring and preventive maintenance: Windows agents, alerts to your phone, maintenance records",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/server.js",
+    "token": "node --disable-warning=ExperimentalWarning server/cli.js token",
+    "check-config": "node --disable-warning=ExperimentalWarning server/cli.js check-config",
+    "unifi-test": "node --disable-warning=ExperimentalWarning server/cli.js unifi-test",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  }
+}

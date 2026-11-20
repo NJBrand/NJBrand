@@ -1,5 +1,7 @@
 # Vault: a self-hosted, end-to-end encrypted password manager with sharing
 
+> This repo also contains **[monitor/](monitor/README.md)**: IT monitoring, phone alerts and maintenance records for office PCs and network gear.
+
 Store passwords in **vaults** and share a vault with anyone who has an account. Each person gets
 owner, editor or viewer access. All encryption happens in the browser. The server stores only
 ciphertext, so someone who steals the database (or runs the server) cannot read your passwords.

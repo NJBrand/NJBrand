@@ -1,0 +1,39 @@
+# /etc/systemd/system/njmonitor.service
+# Install:  see monitor/README.md ("Install the server")
+# Logs:     journalctl -u njmonitor -f
+[Unit]
+Description=NJ IT monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=njmonitor
+Group=njmonitor
+WorkingDirectory=/opt/njbrand/monitor
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/server.js
+# Listens on the LAN so office PCs can check in. Firewall it to your office subnet.
+Environment=HOST=0.0.0.0
+Environment=PORT=8090
+Environment=DATA_DIR=/var/lib/njmonitor
+Environment=CONFIG=/etc/njmonitor/config.json
+# ADMIN_PASSWORD=... lives here (chmod 600), not in this file:
+EnvironmentFile=/etc/njmonitor/env
+Restart=always
+RestartSec=5
+
+StateDirectory=njmonitor
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/njmonitor
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
